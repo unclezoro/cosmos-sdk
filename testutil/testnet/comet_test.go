@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	sdkmath "cosmossdk.io/math"
 	storetypes "cosmossdk.io/store/types"
 	cmtcfg "github.com/cometbft/cometbft/config"
+	cmted25519 "github.com/cometbft/cometbft/crypto/ed25519"
 	"github.com/cometbft/cometbft/node"
 	"github.com/cometbft/cometbft/privval"
 	"github.com/cometbft/cometbft/proxy"
@@ -23,7 +25,6 @@ import (
 	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	servercmtlog "github.com/cosmos/cosmos-sdk/server/log"
-	"github.com/cosmos/cosmos-sdk/testutil/mock"
 	"github.com/cosmos/cosmos-sdk/testutil/testnet"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/auth/tx"
@@ -38,6 +39,8 @@ import (
 )
 
 type GenesisState struct {
+	PrivVals []cmted25519.PrivKey
+
 	Validators []stakingtypes.Validator
 
 	Delegations []stakingtypes.Delegation
@@ -52,15 +55,17 @@ type GenesisState struct {
 func newGenesisState(t *testing.T, count int) GenesisState {
 	t.Helper()
 
+	privVals := make([]cmted25519.PrivKey, count)
 	stakingVals := make([]stakingtypes.Validator, count)
 	genesisAccounts := make([]authtypes.GenesisAccount, count)
 	delegations := make([]stakingtypes.Delegation, count)
 	balances := make([]banktypes.Balance, count)
 	cmtGenesisValidators := make([]cmttypes.GenesisValidator, count)
 	for i := 0; i < count; i++ {
-		privVal := mock.NewPV()
-		pubKey, err := privVal.GetPubKey()
-		require.NoError(t, err)
+		privVal := cmted25519.GenPrivKey()
+		pubKey := privVal.PubKey()
+
+		privVals[i] = privVal
 
 		const votingPower = 1
 		cmtVal := cmttypes.NewValidator(pubKey, votingPower)
@@ -106,6 +111,7 @@ func newGenesisState(t *testing.T, count int) GenesisState {
 		)
 	}
 	return GenesisState{
+		PrivVals:        privVals,
 		Validators:      stakingVals,
 		GenesisAccounts: genesisAccounts,
 		Balances:        balances,
@@ -166,49 +172,72 @@ func (s GenesisState) GenesisJSON(chainID string) ([]byte, error) {
 	})
 }
 
-func TestComet_SingleInstance(t *testing.T) {
-	dir := t.TempDir()
+func TestComet_Multiple(t *testing.T) {
+	const nVals = 4
 
-	cfg, err := testnet.NewDiskConfig(dir, cmtcfg.DefaultConfig())
-	require.NoError(t, err)
-
-	gs := newGenesisState(t, 2)
+	gs := newGenesisState(t, nVals)
 	jGenesis, err := gs.GenesisJSON("testchain")
 	require.NoError(t, err)
 
-	err = os.WriteFile(cfg.Cfg.GenesisFile(), jGenesis, 0600)
-	require.NoError(t, err)
-
-	appGenesisProvider := func() (*cmttypes.GenesisDoc, error) {
-		appGenesis, err := genutiltypes.AppGenesisFromFile(cfg.Cfg.GenesisFile())
-		if err != nil {
-			return nil, err
-		}
-
-		return appGenesis.ToGenesisDoc()
-	}
-
 	logger := log.NewTestLogger(t)
 
-	app := newMinimalBaseApp(logger)
+	p2pAddrs := make([]string, 0, nVals)
+	for i := 0; i < nVals; i++ {
+		dir := t.TempDir()
 
-	n, err := node.NewNode(
-		cfg.Cfg,
-		privval.LoadOrGenFilePV(cfg.Cfg.PrivValidatorKeyFile(), cfg.Cfg.PrivValidatorStateFile()),
-		cfg.NodeKey,
-		proxy.NewLocalClientCreator(app),
-		appGenesisProvider,
-		node.DefaultDBProvider,
-		node.DefaultMetricsProvider(cfg.Cfg.Instrumentation),
-		servercmtlog.CometZeroLogWrapper{Logger: logger.With("rootmodule", "comet_node")},
-	)
-	if err != nil {
-		t.Fatal(err)
+		cmtCfg := cmtcfg.DefaultConfig()
+		cmtCfg.RPC.ListenAddress = "tcp://127.0.0.1:0" // Listen on random port for RPC.
+		cmtCfg.P2P.ListenAddress = "tcp://127.0.0.1:0" // Listen on random port for P2P too.
+		cmtCfg.P2P.PersistentPeers = strings.Join(p2pAddrs, ",")
+		cmtCfg.P2P.AllowDuplicateIP = true // All peers will be on 127.0.0.1.
+		cmtCfg.P2P.AddrBookStrict = false
+
+		cfg, err := testnet.NewDiskConfig(dir, cmtCfg)
+		require.NoError(t, err)
+
+		appGenesisProvider := func() (*cmttypes.GenesisDoc, error) {
+			appGenesis, err := genutiltypes.AppGenesisFromFile(cfg.Cfg.GenesisFile())
+			if err != nil {
+				return nil, err
+			}
+
+			return appGenesis.ToGenesisDoc()
+		}
+
+		err = os.WriteFile(cfg.Cfg.GenesisFile(), jGenesis, 0600)
+		require.NoError(t, err)
+
+		app := newMinimalBaseApp(logger)
+
+		fpv := privval.NewFilePV(gs.PrivVals[i], cfg.Cfg.PrivValidatorKeyFile(), cfg.Cfg.PrivValidatorStateFile())
+		fpv.Save()
+
+		n, err := node.NewNode(
+			cfg.Cfg,
+			fpv,
+			cfg.NodeKey,
+			proxy.NewLocalClientCreator(app),
+			appGenesisProvider,
+			node.DefaultDBProvider,
+			node.DefaultMetricsProvider(cfg.Cfg.Instrumentation),
+			servercmtlog.CometZeroLogWrapper{Logger: logger.With("rootmodule", fmt.Sprintf("comet_node-%d", i))},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		require.NoError(t, n.Start())
+
+		// This must be the "real" net address,
+		// i.e. the final address reported by (net.Listener).Addr().
+		// Comet 0.37.0 does not report this.
+		p2pAddr := n.PEXReactor().Switch.NetAddress()
+		p2pAddrs = append(p2pAddrs, p2pAddr.String())
+
+		defer n.Stop()
 	}
 
-	defer n.Stop()
-
-	time.Sleep(time.Second)
+	time.Sleep(10 * time.Second)
 }
 
 func newMinimalBaseApp(logger log.Logger) *baseapp.BaseApp {
