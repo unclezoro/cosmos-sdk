@@ -174,9 +174,10 @@ func (s GenesisState) GenesisJSON(chainID string) ([]byte, error) {
 
 func TestComet_Multiple(t *testing.T) {
 	const nVals = 4
+	const chainID = "testchain"
 
 	gs := newGenesisState(t, nVals)
-	jGenesis, err := gs.GenesisJSON("testchain")
+	jGenesis, err := gs.GenesisJSON(chainID)
 	require.NoError(t, err)
 
 	logger := log.NewTestLogger(t)
@@ -207,7 +208,7 @@ func TestComet_Multiple(t *testing.T) {
 		err = os.WriteFile(cfg.Cfg.GenesisFile(), jGenesis, 0600)
 		require.NoError(t, err)
 
-		app := newMinimalBaseApp(logger)
+		app := newMinimalBaseApp(logger, chainID)
 
 		fpv := privval.NewFilePV(gs.PrivVals[i], cfg.Cfg.PrivValidatorKeyFile(), cfg.Cfg.PrivValidatorStateFile())
 		fpv.Save()
@@ -240,7 +241,7 @@ func TestComet_Multiple(t *testing.T) {
 	time.Sleep(10 * time.Second)
 }
 
-func newMinimalBaseApp(logger log.Logger) *baseapp.BaseApp {
+func newMinimalBaseApp(logger log.Logger, chainID string) *baseapp.BaseApp {
 	ir := codectypes.NewInterfaceRegistry()
 	pCodec := codec.NewProtoCodec(ir)
 
@@ -259,6 +260,7 @@ func newMinimalBaseApp(logger log.Logger) *baseapp.BaseApp {
 		logger.With("rootmodule", "baseapp"),
 		db,
 		txConfig.TxDecoder(),
+		baseapp.SetChainID(chainID),
 	)
 	app.SetParamStore(&consParamKeeper)
 
