@@ -46,8 +46,8 @@ func (vpk ValidatorPrivKeys) CometGenesisValidators() CometGenesisValidators {
 
 type CometGenesisValidators []cmttypes.GenesisValidator
 
-func (cgv CometGenesisValidators) StakingValidators() StakingValidators {
-	sv := make(StakingValidators, len(cgv))
+func (cgv CometGenesisValidators) StakingValidators() (vals StakingValidators, supply sdk.Coins) {
+	vals = make(StakingValidators, len(cgv))
 	for i, v := range cgv {
 		pk, err := cryptocodec.FromCmtPubKeyInterface(v.PubKey)
 		if err != nil {
@@ -59,7 +59,7 @@ func (cgv CometGenesisValidators) StakingValidators() StakingValidators {
 			panic(fmt.Errorf("failed to wrap pub key in any type: %w", err))
 		}
 
-		sv[i] = stakingtypes.Validator{
+		vals[i] = stakingtypes.Validator{
 			OperatorAddress:   sdk.ValAddress(v.Address).String(),
 			ConsensusPubkey:   pkAny,
 			Status:            stakingtypes.Bonded,
@@ -69,9 +69,11 @@ func (cgv CometGenesisValidators) StakingValidators() StakingValidators {
 
 			// more fields uncopied from testutil/sims/app_helpers.go:220
 		}
+
+		supply = supply.Add(sdk.NewCoin(sdk.DefaultBondDenom, sdk.DefaultPowerReduction))
 	}
 
-	return sv
+	return vals, supply
 }
 
 type StakingValidators []stakingtypes.Validator

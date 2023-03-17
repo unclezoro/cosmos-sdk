@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"cosmossdk.io/log"
+	sdkmath "cosmossdk.io/math"
 	cmtcfg "github.com/cometbft/cometbft/config"
 	"github.com/cometbft/cometbft/node"
 	"github.com/cometbft/cometbft/privval"
@@ -17,6 +18,7 @@ import (
 	servercmtlog "github.com/cosmos/cosmos-sdk/server/log"
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
 	"github.com/cosmos/cosmos-sdk/testutil/testnet"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
 	"github.com/stretchr/testify/require"
 )
@@ -27,15 +29,24 @@ func TestTestnet(t *testing.T) {
 
 	valPKs := testnet.NewValidatorPrivKeys(nVals)
 	cmtVals := valPKs.CometGenesisValidators()
+	stakingVals, valSupply := cmtVals.StakingValidators()
 
 	delPKs := testnet.NewDelegatorPrivKeys(nVals)
 	baseAccounts := delPKs.BaseAccounts()
 	delegations := baseAccounts.Delegations(cmtVals)
 
+	balances, balanceSupply := baseAccounts.Balances(
+		sdk.NewCoins(sdk.NewCoin(sdk.DefaultBondDenom, sdkmath.NewInt(10_000_000_000_000_000))),
+	)
+
+	totalSupply := balanceSupply.Add(valSupply...)
+
 	jGenesis := testnet.NewGenesisBuilder().
 		ChainID(chainID).
 		Consensus(nil, cmtVals).
-		DefaultStaking(cmtVals.StakingValidators(), delegations).
+		StakingWithDefaultParams(stakingVals, delegations).
+		BankingWithDefaultParams(balances, totalSupply, nil, nil).
+		EmptyAppState().
 		Encode()
 
 	logger := log.NewTestLogger(t)
@@ -70,7 +81,7 @@ func TestTestnet(t *testing.T) {
 			logger.With("instance", i),
 			dbm.NewMemDB(),
 			nil,
-			false,
+			true,
 			simtestutil.AppOptionsMap{},
 			baseapp.SetChainID(chainID),
 		)
