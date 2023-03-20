@@ -60,7 +60,7 @@ func (cgv CometGenesisValidators) StakingValidators() (vals StakingValidators, s
 		}
 
 		vals[i] = stakingtypes.Validator{
-			OperatorAddress:   sdk.ValAddress(v.Address).String(),
+			OperatorAddress:   sdk.ValAddress(v.Address).String(), // TODO: this relies on global bech32 config.
 			ConsensusPubkey:   pkAny,
 			Status:            stakingtypes.Bonded,
 			Tokens:            sdk.DefaultPowerReduction,
