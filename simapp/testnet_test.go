@@ -39,15 +39,22 @@ func TestTestnet(t *testing.T) {
 		sdk.NewCoins(sdk.NewCoin(sdk.DefaultBondDenom, sdkmath.NewInt(10_000_000_000_000_000))),
 	)
 
+	balances = append(balances, stakingVals.BondedPoolBalance())
+
 	totalSupply := balanceSupply.Add(valSupply...)
 
-	jGenesis := testnet.NewGenesisBuilder().
+	b := testnet.NewGenesisBuilder().
 		ChainID(chainID).
 		Consensus(nil, cmtVals).
 		StakingWithDefaultParams(stakingVals, delegations).
-		BankingWithDefaultParams(balances, totalSupply, nil, nil).
-		EmptyAppState().
-		Encode()
+		BankingWithDefaultParams(balances, totalSupply, nil, nil)
+
+	for i, v := range valPKs {
+		b.GenTx(v, cmtVals[i], sdk.NewCoin(sdk.DefaultBondDenom, sdk.DefaultPowerReduction))
+	}
+
+	jGenesis := b.Encode()
+	t.Logf("jGenesis: %s", jGenesis)
 
 	logger := log.NewTestLogger(t)
 

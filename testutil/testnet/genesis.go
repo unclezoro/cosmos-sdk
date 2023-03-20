@@ -22,21 +22,27 @@ import (
 
 type GenesisBuilder struct {
 	amino *codec.LegacyAmino
+	codec *codec.ProtoCodec
 
 	chainID string
 
-	json map[string]json.RawMessage
+	outer, appState map[string]json.RawMessage
 
 	gentxs []sdk.Tx
 }
 
 func NewGenesisBuilder() *GenesisBuilder {
+	ir := codectypes.NewInterfaceRegistry()
+	cryptocodec.RegisterInterfaces(ir)
+	stakingtypes.RegisterInterfaces(ir)
+	pCodec := codec.NewProtoCodec(ir)
+
 	return &GenesisBuilder{
 		amino: codec.NewLegacyAmino(),
+		codec: pCodec,
 
-		json: map[string]json.RawMessage{
-			"app_state": json.RawMessage("{}"),
-		},
+		outer:    map[string]json.RawMessage{},
+		appState: map[string]json.RawMessage{},
 	}
 }
 
@@ -73,13 +79,7 @@ func (b *GenesisBuilder) GenTx(privVal cmted25519.PrivKey, val cmttypes.GenesisV
 		panic(err)
 	}
 
-	// Configure the tx builder.
-	ir := codectypes.NewInterfaceRegistry()
-	cryptocodec.RegisterInterfaces(ir)
-	stakingtypes.RegisterInterfaces(ir)
-	pCodec := codec.NewProtoCodec(ir)
-
-	txConf := authtx.NewTxConfig(pCodec, tx.DefaultSignModes)
+	txConf := authtx.NewTxConfig(b.codec, tx.DefaultSignModes)
 
 	txb := txConf.NewTxBuilder()
 	if err := txb.SetMsgs(msg); err != nil {
@@ -132,7 +132,7 @@ func (b *GenesisBuilder) ChainID(id string) *GenesisBuilder {
 	b.chainID = id
 
 	var err error
-	b.json["chain_id"], err = json.Marshal(id)
+	b.outer["chain_id"], err = json.Marshal(id)
 	if err != nil {
 		panic(err)
 	}
@@ -145,7 +145,7 @@ func (b *GenesisBuilder) Consensus(params *cmttypes.ConsensusParams, vals CometG
 		params = cmttypes.DefaultConsensusParams()
 	}
 	var err error
-	b.json[consensusparamtypes.ModuleName], err = (&genutiltypes.ConsensusGenesis{
+	b.outer[consensusparamtypes.ModuleName], err = (&genutiltypes.ConsensusGenesis{
 		Params:     params,
 		Validators: vals,
 	}).MarshalJSON()
@@ -166,7 +166,7 @@ func (b *GenesisBuilder) Staking(
 	delegations []stakingtypes.Delegation,
 ) *GenesisBuilder {
 	var err error
-	b.json[stakingtypes.ModuleName], err = b.amino.MarshalJSON(
+	b.appState[stakingtypes.ModuleName], err = b.codec.MarshalJSON(
 		stakingtypes.NewGenesisState(params, vals, delegations),
 	)
 	if err != nil {
@@ -199,7 +199,7 @@ func (b *GenesisBuilder) Banking(
 	sendEnabled []banktypes.SendEnabled,
 ) *GenesisBuilder {
 	var err error
-	b.json[banktypes.ModuleName], err = b.amino.MarshalJSON(
+	b.appState[banktypes.ModuleName], err = b.codec.MarshalJSON(
 		banktypes.NewGenesisState(
 			params,
 			balances,
@@ -214,8 +214,28 @@ func (b *GenesisBuilder) Banking(
 	return b
 }
 
+func (b *GenesisBuilder) JSON() map[string]json.RawMessage {
+	gentxGenesisState := genutiltypes.NewGenesisStateFromTx(
+		authtx.NewTxConfig(b.codec, tx.DefaultSignModes).TxJSONEncoder(),
+		b.gentxs,
+	)
+
+	b.appState = genutiltypes.SetGenesisStateInAppState(
+		b.codec, b.appState, gentxGenesisState,
+	)
+
+	appState, err := b.amino.MarshalJSON(b.appState)
+	if err != nil {
+		panic(err)
+	}
+
+	b.outer["app_state"] = appState
+
+	return b.outer
+}
+
 func (b *GenesisBuilder) Encode() []byte {
-	j, err := b.amino.MarshalJSON(b.json)
+	j, err := b.amino.MarshalJSON(b.JSON())
 	if err != nil {
 		panic(err)
 	}

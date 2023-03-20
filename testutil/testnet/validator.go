@@ -7,8 +7,10 @@ import (
 	cmted25519 "github.com/cometbft/cometbft/crypto/ed25519"
 	cmttypes "github.com/cometbft/cometbft/types"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 )
 
@@ -77,3 +79,16 @@ func (cgv CometGenesisValidators) StakingValidators() (vals StakingValidators, s
 }
 
 type StakingValidators []stakingtypes.Validator
+
+func (sv StakingValidators) BondedPoolBalance() banktypes.Balance {
+	var coins sdk.Coins
+
+	for _, v := range sv {
+		coins = coins.Add(sdk.NewCoin(sdk.DefaultBondDenom, v.Tokens))
+	}
+
+	return banktypes.Balance{
+		Address: authtypes.NewModuleAddress(stakingtypes.BondedPoolName).String(),
+		Coins:   coins,
+	}
+}
